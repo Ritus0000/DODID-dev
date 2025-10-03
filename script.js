@@ -236,3 +236,111 @@ function reorderTasks() {
   // плавно перерисовываем порядок
   [...active, ...completed].forEach(li => tasks.appendChild(li));
 }
+/* ===== FLIP + «протяжка» выбранного li через список ===== */
+
+const MOVE_DURATION = 700; // длительность движения «призрака» (мс)
+const LIST_EASE     = 'cubic-bezier(.2,.8,.2,1)'; // плавность для FLIP у остальных
+
+function rectMap(ul){
+  const m = new Map();
+  ul.querySelectorAll(':scope > li').forEach(el => m.set(el, el.getBoundingClientRect()));
+  return m;
+}
+
+function makeGhostFrom(li, r0){
+  const ghost = li.cloneNode(true);
+  ghost.classList.add('ghost-li');
+  const s = ghost.style;
+  s.left   = r0.left + 'px';
+  s.top    = r0.top  + 'px';
+  s.width  = r0.width  + 'px';
+  s.height = r0.height + 'px';
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+/**
+ * Анимирует перестановку:
+ * - до: меряем позиции,
+ * - делаем DOM-перестановку,
+ * - после: FLIP для всех, «призрак» едет по пути, пересекаемые — подпрыгивают.
+ *
+ * @param {HTMLLIElement} movedLi — перемещаемый элемент
+ * @param {Function} domChange — функция, которая делает саму перестановку в DOM (appendChild/insertBefore)
+ */
+function animateListReorder(movedLi, domChange){
+  const ul = document.getElementById('tasks');
+
+  // 1) До — замеряем «до»
+  const before = rectMap(ul);
+  const r0 = before.get(movedLi);
+
+  // 2) Создаём «призрака», настоящий li временно прячем
+  const ghost = makeGhostFrom(movedLi, r0);
+  movedLi.classList.add('leaving');
+
+  // 3) Делаем перестановку в DOM
+  domChange();
+
+  // 4) После — замеряем «после»
+  const after = rectMap(ul);
+  const r1 = after.get(movedLi);
+
+  // 5) FLIP для всех li (кроме перемещаемого, он прячется, его роль играет ghost)
+  ul.querySelectorAll(':scope > li').forEach(el=>{
+    const a = after.get(el), b = before.get(el);
+    if(!a || !b || el === movedLi) return;
+    const dx = b.left - a.left;
+    const dy = b.top  - a.top;
+    if (dx || dy){
+      el.style.transform  = `translate(${dx}px, ${dy}px)`;
+      el.offsetWidth; // reflow
+      el.style.transition = `transform 420ms ${LIST_EASE}`;
+      el.style.transform  = `translate(0,0)`;
+      el.addEventListener('transitionend', function te(){
+        el.style.transition=''; el.style.transform=''; el.removeEventListener('transitionend', te);
+      });
+    }
+  });
+
+  // 6) Подпрыгивание элементов, через которые проезжает призрак
+  const ghostMidStart = r0.top + r0.height/2;
+  const ghostMidEnd   = r1.top + r1.height/2;
+  const passMin = Math.min(ghostMidStart, ghostMidEnd);
+  const passMax = Math.max(ghostMidStart, ghostMidEnd);
+
+  ul.querySelectorAll(':scope > li').forEach(el=>{
+    if(el === movedLi) return;
+    const a = after.get(el); if(!a) return;
+    const center = a.top + a.height/2;
+    if(center >= passMin && center <= passMax){
+      // задержка подпрыгивания зависит от расстояния до старта движения призрака
+      const dist = Math.abs(center - ghostMidStart);
+      const delay = Math.min(250, dist * 0.25); // мс
+      el.classList.add('bump');
+      el.style.animationDelay = `${Math.round(delay)}ms`;
+      el.addEventListener('animationend', function ae(){
+        el.classList.remove('bump');
+        el.style.animationDelay = '';
+        el.removeEventListener('animationend', ae);
+      });
+    }
+  });
+
+  // 7) Сам «проезд» призрака: top от r0.top -> r1.top
+  requestAnimationFrame(()=>{
+    const s = ghost.style;
+    s.transition = `top ${MOVE_DURATION}ms cubic-bezier(.18,1.0,.22,1)`;
+    s.top = r1.top + 'px';
+
+    ghost.addEventListener('transitionend', function done(){
+      ghost.removeEventListener('transitionend', done);
+      // маленький «отскок» для приятности
+      ghost.classList.add('ghost-settle');
+      ghost.addEventListener('animationend', ()=>{
+        ghost.remove();
+        movedLi.classList.remove('leaving'); // показываем настоящий элемент на новой позиции
+      }, { once: true });
+    }, { once: true });
+  });
+}
