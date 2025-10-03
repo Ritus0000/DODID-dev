@@ -157,3 +157,45 @@ li.done {
 #tasks li {
   transition: all 0.35s cubic-bezier(.25,.8,.25,1);
 }
+
+/* --- FLIP + «протяжка» и подпрыгивания --- */
+
+/* Временная невидимость реального <li>, пока едет «призрак» */
+li.leaving { visibility: hidden; }
+
+/* Вспомогательный «призрак» перемещаемого элемента (едет поверх списка) */
+.ghost-li {
+  position: fixed; /* важен viewport-референс для top/left */
+  margin: 0;
+  z-index: 9999;
+  pointer-events: none;
+  box-sizing: border-box;
+  will-change: transform, top, left;
+  filter: drop-shadow(0 8px 18px rgba(0,0,0,.15));
+  border-radius: 8px; /* чуть сгладим, выглядит приятнее */
+  background: #fff;  /* чтобы текст был читаем при проезде над другими */
+}
+
+/* «Приземление» призрака в конце пути — лёгкий отскок */
+@keyframes settle {
+  0%   { transform: translateY(0); }
+  35%  { transform: translateY(-6px); }
+  100% { transform: translateY(0); }
+}
+.ghost-settle { animation: settle 220ms cubic-bezier(.25,1.4,.3,1); }
+
+/* Подпрыгивание задач, через которые проехали */
+@keyframes bump {
+  0%   { transform: translateY(0); }
+  40%  { transform: translateY(-4px); }
+  100% { transform: translateY(0); }
+}
+.bump {
+  animation: bump 260ms cubic-bezier(.25,1.4,.3,1);
+  /* индивидуальная задержка задаётся инлайном из JS через animation-delay */
+}
+
+/* Гладкая FLIP-анимация для остальных li */
+li {
+  will-change: transform;
+}
