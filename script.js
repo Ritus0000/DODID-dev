@@ -1,42 +1,39 @@
 /* ============================================================
-   DODID — script.js с мягкой FLIP-анимацией
-   — задача «проезжает» плавно, без рамки и теней
-   — соседи едва подпрыгивают (2px), общая динамика мягкая
+   DODID — script.js с «гравитационным линзированием»
+   — задача проезжает вниз/вверх,
+   — у текстов, рядом с траекторией, мягко меняется масштаб/кернинг,
+   — без рамок/теней у «призрака», плавно и аккуратно.
    ============================================================ */
 
-/* ---------- Авто-добавление минимального CSS для анимаций ---------- */
-(function injectFlipStyles(){
+/* ---------- Минимальный CSS под анимацию: без рамки/тени у ghost, подсказки браузеру ---------- */
+(function injectStyles(){
+  // сносим старые инжекты (если были)
+  document.querySelectorAll('style[data-dodid-flip]').forEach(s=>s.remove());
+
   const css = `
-/* Реальный li скрыт, пока едет его «призрак» */
-li.leaving { visibility: hidden; }
+  li.leaving{visibility:hidden}
 
-/* «Призрак» перемещаемого элемента: вообще без «рамки» и теней */
-.ghost-li {
-  position: fixed;
-  z-index: 9999;
-  margin: 0;
-  pointer-events: none;
-  box-sizing: border-box;
-  will-change: transform, top, left;
-  /* никаких background, border, shadow — выглядит как оригинальный li */
-}
+  /* «Призрак» перемещаемого элемента: никакого фона/тени/рамки */
+  .ghost-li{
+    position:fixed; z-index:9999; margin:0; pointer-events:none; box-sizing:border-box;
+    will-change:top,left,transform;
+    background:transparent!important; box-shadow:none!important; filter:none!important;
+    border:0!important; border-radius:0!important;
+  }
 
-/* Лёгкое подпрыгивание элементов, мимо которых проезжаем (всего 2px) */
-@keyframes bump {
-  0%   { transform: translateY(0); }
-  40%  { transform: translateY(-2px); }
-  100% { transform: translateY(0); }
-}
-.bump {
-  animation: bump 220ms ease-out;
-}
+  /* контент задачи, который будем «гнуть» как свет */
+  #tasks .textwrap{
+    will-change: transform, letter-spacing;
+    transform-origin: center center;
+  }
 
-/* Помощь браузеру при FLIP */
-#tasks { overflow-anchor: none; }
-#tasks li { will-change: transform; }
+  /* помощь при FLIP */
+  #tasks{ overflow-anchor:none; }
+  #tasks li{ will-change: transform; }
   `.trim();
+
   const tag = document.createElement('style');
-  tag.setAttribute('data-dodid-flip', 'true');
+  tag.setAttribute('data-dodid-flip','true');
   tag.textContent = css;
   document.head.appendChild(tag);
 })();
@@ -80,7 +77,7 @@ setInterval(rolloverIfNeeded, 60_000);
 const list = document.getElementById('tasks');
 const addBtn = document.getElementById('addBtn');
 
-/* Показ тонкой полоски только во время скролла */
+/* Тонкий скроллбар только во время прокрутки */
 let hideTimer=null;
 list.addEventListener('scroll', ()=>{
   list.classList.add('scrolling');
@@ -97,7 +94,7 @@ function makeTick(){
   svg.appendChild(p1); svg.appendChild(p2); return svg;
 }
 
-/* ===== Зачёркивание (SVG по реальным строкам) ===== */
+/* ===== Зачёркивание по реальным строкам (SVG) ===== */
 let fontMetricsCache=null;
 function computeFontMetricsFor(el){
   const cs=getComputedStyle(el);
@@ -148,7 +145,7 @@ function buildStrike(textWrap, animate=true){
   textWrap.appendChild(svg);
 }
 
-/* Фокус в конец, чтобы сразу печатать */
+/* Фокус в конец */
 function placeCaretAtEnd(el){
   const r=document.createRange(); r.selectNodeContents(el); r.collapse(false);
   const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
@@ -157,9 +154,12 @@ function focusEditable(el){
   requestAnimationFrame(()=>{ el.focus({preventScroll:true}); placeCaretAtEnd(el); try{ el.click(); }catch{} });
 }
 
-/* ===================== Мягкая FLIP-анимация ===================== */
-const MOVE_DURATION = 950; // более плавный, долгий проезд
-const LIST_EASE     = 'ease-in-out'; // мягкая кривая для остального списка
+/* ===================== Мягкая FLIP + «гравитационная линза» ===================== */
+const MOVE_DURATION = 1000;           // длительность «проезда» призрака (мс) — плавнее
+const LIST_EASE     = 'ease-in-out';  // плавность для FLIP остальных
+const LENS_RADIUS   = 140;            // радиус влияния «линзы» (px) по вертикали
+const LENS_SCALE    = 0.08;           // макс. прибавка масштаба (0.08 => 8%)
+const LENS_KERN_PX  = 0.35;           // макс. прибавка letter-spacing (px)
 
 function rectMap(ul){
   const m = new Map();
@@ -178,11 +178,55 @@ function makeGhostFrom(li, r0){
   return ghost;
 }
 
+/* «Линза»: в каждом кадре читаем положение призрака и искажаем ближайшие тексты */
+function startLensLoop(ghost, ul, movedLi){
+  let rafId = 0;
+  const wraps = Array.from(ul.querySelectorAll(':scope > li .textwrap'))
+                      .filter(w => !w.closest('li').isSameNode(movedLi));
+
+  function frame(){
+    // центр призрака по вертикали
+    const gr = ghost.getBoundingClientRect();
+    const gCenter = gr.top + gr.height/2;
+
+    for(const wrap of wraps){
+      const wr = wrap.getBoundingClientRect();
+      const wCenter = wr.top + wr.height/2;
+      const dist = Math.abs(wCenter - gCenter);
+
+      // сила эффекта 0..1 с плавным спадом, чуть нелинейно (степень 1.3)
+      let k = 1 - (dist / LENS_RADIUS);
+      if (k < 0) k = 0; else k = Math.pow(k, 1.3);
+
+      const scale = 1 + LENS_SCALE * k;
+      const kern  = (LENS_KERN_PX * k).toFixed(3) + 'px';
+
+      // чуть сильнее «высоту» чем «ширину» — ближе к «грав. линзе»
+      wrap.style.transform = `translateZ(0) scale(${scale}, ${1 + (LENS_SCALE*1.15)*k})`;
+      wrap.style.letterSpacing = kern;
+    }
+
+    rafId = requestAnimationFrame(frame);
+  }
+
+  rafId = requestAnimationFrame(frame);
+
+  // функция остановки и очистки
+  return () => {
+    cancelAnimationFrame(rafId);
+    for(const wrap of wraps){
+      wrap.style.transform = '';
+      wrap.style.letterSpacing = '';
+    }
+  };
+}
+
 /**
  * Анимирует перестановку:
- * - до: меряем позиции,
- * - делаем DOM-перестановку (в колбэке),
- * - после: FLIP для всех, «призрак» едет по top, пересекаемые слегка подпрыгивают.
+ * - измеряем позиции (до/после),
+ * - делаем FLIP для остальных,
+ * - двигаем «призрака» top'ом,
+ * - параллельно применяем «линзу» на тексты вокруг траектории.
  */
 function animateListReorder(movedLi, domChange){
   const ul = list;
@@ -191,7 +235,7 @@ function animateListReorder(movedLi, domChange){
   const before = rectMap(ul);
   const r0 = before.get(movedLi);
 
-  // 2) Призрак без рамки; реальный li скрыт
+  // 2) Призрак без рамок; реальный li скрыт
   const ghost = makeGhostFrom(movedLi, r0);
   movedLi.classList.add('leaving');
 
@@ -202,7 +246,7 @@ function animateListReorder(movedLi, domChange){
   const after = rectMap(ul);
   const r1 = after.get(movedLi);
 
-  // 5) FLIP остальных li (мягче и дольше)
+  // 5) FLIP остальных (мягко)
   ul.querySelectorAll(':scope > li').forEach(el=>{
     const a = after.get(el), b = before.get(el);
     if(!a || !b || el === movedLi) return;
@@ -219,39 +263,20 @@ function animateListReorder(movedLi, domChange){
     }
   });
 
-  // 6) Едва заметное подпрыгивание у тех, мимо кого проезжаем
-  const ghostMidStart = r0.top + r0.height/2;
-  const ghostMidEnd   = r1.top + r1.height/2;
-  const passMin = Math.min(ghostMidStart, ghostMidEnd);
-  const passMax = Math.max(ghostMidStart, ghostMidEnd);
+  // 6) Запускаем «линзу»
+  const stopLens = startLensLoop(ghost, ul, movedLi);
 
-  ul.querySelectorAll(':scope > li').forEach(el=>{
-    if(el === movedLi) return;
-    const a = after.get(el); if(!a) return;
-    const center = a.top + a.height/2;
-    if(center >= passMin && center <= passMax){
-      const dist = Math.abs(center - ghostMidStart);
-      const delay = Math.min(180, dist * 0.2); // мягче и короче
-      el.classList.add('bump');
-      el.style.animationDelay = `${Math.round(delay)}ms`;
-      el.addEventListener('animationend', function ae(){
-        el.classList.remove('bump');
-        el.style.animationDelay = '';
-        el.removeEventListener('animationend', ae);
-      });
-    }
-  });
-
-  // 7) Сам проезд призрака — плавно, без финального «отскока»
+  // 7) Проезд призрака
   requestAnimationFrame(()=>{
     const s = ghost.style;
-    s.transition = `top ${MOVE_DURATION}ms ease-in-out`;
+    s.transition = `top ${MOVE_DURATION}ms ${LIST_EASE}`;
     s.top = r1.top + 'px';
 
     ghost.addEventListener('transitionend', function done(){
       ghost.removeEventListener('transitionend', done);
-      ghost.remove();                     // без settle-анимации
-      movedLi.classList.remove('leaving'); // показываем реальный элемент
+      stopLens();            // очистка искажений
+      ghost.remove();        // убираем призрак
+      movedLi.classList.remove('leaving'); // показываем реальный элемент на новой позиции
     }, { once: true });
   });
 }
@@ -278,7 +303,7 @@ function render(){
     wrap.appendChild(text);
     li.appendChild(circle); li.appendChild(wrap); list.appendChild(li);
 
-    /* Клик по кружку: отмечаем done и запускаем мягкую протяжку */
+    // Клик по кружку — отметка и анимация перемещения
     circle.addEventListener('click',()=>{
       if((text.textContent||'').trim()==='') return;
 
@@ -288,25 +313,25 @@ function render(){
         li.classList.add('done'); circle.innerHTML=''; circle.appendChild(makeTick());
         buildStrike(wrap,true);
 
-        // Протяжка вниз (в конец)
+        // протяжка вниз
         animateListReorder(li, ()=> { list.appendChild(li); });
 
       } else {
         li.classList.remove('done'); circle.innerHTML='';
         const s=wrap.querySelector('.strike-svg'); if(s) s.remove();
 
-        // Протяжка вверх (в начало)
+        // протяжка вверх (в начало)
         animateListReorder(li, ()=> { list.insertBefore(li, list.firstChild); });
       }
     });
 
-    /* Изменение текста */
+    // Изменение текста
     text.addEventListener('input',()=>{
       tasks[i].text=text.textContent; save(); syncEmpty(text);
       if(t.done) buildStrike(wrap,false);
     });
 
-    /* Backspace/Delete на пустой строке — удалить задачу */
+    // Backspace/Delete на пустой строке — удалить задачу
     text.addEventListener('keydown',(e)=>{
       const val=(text.textContent||'').trim();
       if((e.key==='Backspace'||e.key==='Delete') && val===''){
