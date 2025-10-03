@@ -1,33 +1,39 @@
 /* ============================================================
-   DODID — script.js с «гравитационным линзированием»
-   — задача проезжает вниз/вверх,
-   — у текстов, рядом с траекторией, мягко меняется масштаб/кернинг,
-   — без рамок/теней у «призрака», плавно и аккуратно.
+   DODID — "Black Hole Motion" (полноценная реализация)
+   — FLIP-перестановка с «призраком»
+   — поле искажения: масштаб/скошенность/кернинг + хвост-запаздывание
+   — без рамок/теней у ghost; док с плюсом не трогаем
    ============================================================ */
 
-/* ---------- Минимальный CSS под анимацию: без рамки/тени у ghost, подсказки браузеру ---------- */
+/* ---------- Инжект минимального CSS (ghost + линзирование) ---------- */
 (function injectStyles(){
-  // сносим старые инжекты (если были)
+  // убрать старые инжекты, если были
   document.querySelectorAll('style[data-dodid-flip]').forEach(s=>s.remove());
 
   const css = `
+  /* Прячем реальный li, пока едет ghost */
   li.leaving{visibility:hidden}
 
-  /* «Призрак» перемещаемого элемента: никакого фона/тени/рамки */
+  /* Призрак: ни фона, ни тени, только клон контента */
   .ghost-li{
     position:fixed; z-index:9999; margin:0; pointer-events:none; box-sizing:border-box;
     will-change:top,left,transform;
-    background:transparent!important; box-shadow:none!important; filter:none!important;
-    border:0!important; border-radius:0!important;
+    background:transparent!important; box-shadow:none!important; filter:none!important; border:0!important;
   }
 
-  /* контент задачи, который будем «гнуть» как свет */
+  /* Сделаем сам кружок призрака визуально «чёрной дырой» (тонко, без рамки) */
+  .ghost-li .circle{
+    background: radial-gradient(closest-side, #000 0%, #0b0b0b 60%, #111 100%) !important;
+    border-color: transparent !important;
+  }
+
+  /* Линзируем .textwrap (внутри li) — отдельный слой, чтобы не конфликтовать с FLIP на li */
   #tasks .textwrap{
-    will-change: transform, letter-spacing;
+    will-change: transform, letter-spacing, filter;
     transform-origin: center center;
   }
 
-  /* помощь при FLIP */
+  /* Поддержка FLIP */
   #tasks{ overflow-anchor:none; }
   #tasks li{ will-change: transform; }
   `.trim();
@@ -40,40 +46,24 @@
 
 /* ===================== День недели ===================== */
 const ruDays = ["Воскресенье","Понедельник","Вторник","Среда","Четверг","Пятница","Суббота"];
-function setDayHeader(d=new Date()){
-  const el = document.getElementById("dayHeader");
-  if (el) el.textContent = ruDays[d.getDay()];
-}
-setDayHeader();
-setInterval(setDayHeader, 60_000);
+function setDayHeader(d=new Date()){ const el=document.getElementById("dayHeader"); if(el) el.textContent=ruDays[d.getDay()]; }
+setDayHeader(); setInterval(setDayHeader, 60_000);
 
-/* ===================== Хранилище и перенос «на новый день» ===================== */
-const KEY_TASKS='dodid_tasks_v1';
-const KEY_LAST ='dodid_lastDate';
-const START_TASKS=3;
-
-let tasks=[];
-try{ tasks=JSON.parse(localStorage.getItem(KEY_TASKS)||'[]')||[] }catch{ tasks=[] }
-if(!tasks.length){ tasks = Array.from({length:START_TASKS},()=>({text:'',done:false})) }
-
+/* ===================== Хранилище / перенос на новый день ===================== */
+const KEY_TASKS='dodid_tasks_v1'; const KEY_LAST='dodid_lastDate'; const START_TASKS=3;
+let tasks=[]; try{ tasks=JSON.parse(localStorage.getItem(KEY_TASKS)||'[]')||[] }catch{ tasks=[] }
+if(!tasks.length){ tasks=Array.from({length:START_TASKS},()=>({text:'',done:false})) }
 function save(){ localStorage.setItem(KEY_TASKS, JSON.stringify(tasks)); }
 function todayKey(d=new Date()){ return d.toDateString(); }
-
 function rolloverIfNeeded(){
-  const today=todayKey(); const last=localStorage.getItem(KEY_LAST);
-  if(last===today) return;
-  const carried = tasks
-    .filter(t=>!t.done && (t.text||'').trim()!=='')
-    .map(t=>({text:t.text,done:false}));
-  tasks = carried.length
-    ? [...carried,{text:'',done:false}]
-    : Array.from({length:START_TASKS},()=>({text:'',done:false}));
-  save(); localStorage.setItem(KEY_LAST, today); render();
+  const today=todayKey(), last=localStorage.getItem(KEY_LAST); if(last===today) return;
+  const carried = tasks.filter(t=>!t.done && (t.text||'').trim()!=='').map(t=>({text:t.text,done:false}));
+  tasks = carried.length? [...carried,{text:'',done:false}] : Array.from({length:START_TASKS},()=>({text:'',done:false}));
+  save(); localStorage.setItem(KEY_LAST,today); render();
 }
-rolloverIfNeeded();
-setInterval(rolloverIfNeeded, 60_000);
+rolloverIfNeeded(); setInterval(rolloverIfNeeded,60_000);
 
-/* ===================== DOM-ссылки ===================== */
+/* ===================== DOM ===================== */
 const list = document.getElementById('tasks');
 const addBtn = document.getElementById('addBtn');
 
@@ -82,10 +72,10 @@ let hideTimer=null;
 list.addEventListener('scroll', ()=>{
   list.classList.add('scrolling');
   clearTimeout(hideTimer); hideTimer=setTimeout(()=>list.classList.remove('scrolling'), 800);
-}, {passive:true});
+},{passive:true});
 
-/* ===================== Помощники UI ===================== */
-function syncEmpty(el){ (el.textContent||'').trim()==='' ? el.classList.add('empty') : el.classList.remove('empty'); }
+/* ===================== Помощники ===================== */
+function syncEmpty(el){ (el.textContent||'').trim()===''? el.classList.add('empty') : el.classList.remove('empty'); }
 function makeTick(){
   const s='http://www.w3.org/2000/svg', svg=document.createElementNS(s,'svg');
   svg.setAttribute('viewBox','0 0 14 14'); svg.classList.add('tick');
@@ -94,140 +84,159 @@ function makeTick(){
   svg.appendChild(p1); svg.appendChild(p2); return svg;
 }
 
-/* ===== Зачёркивание по реальным строкам (SVG) ===== */
+/* ---- Зачёркивание по реальным строкам (SVG) ---- */
 let fontMetricsCache=null;
 function computeFontMetricsFor(el){
   const cs=getComputedStyle(el);
-  const style=cs.fontStyle||'normal'; const weight=cs.fontWeight||'400';
-  const size=cs.fontSize||'18px'; const line=cs.lineHeight && cs.lineHeight!=='normal'? cs.lineHeight:size;
-  const family=cs.fontFamily || 'Helvetica Neue, Arial, sans-serif';
+  const style=cs.fontStyle||'normal', weight=cs.fontWeight||'400';
+  const size=cs.fontSize||'18px', line=cs.lineHeight&&cs.lineHeight!=='normal'? cs.lineHeight:size;
+  const family=cs.fontFamily||'Helvetica Neue, Arial, sans-serif';
   const font=`${style} ${weight} ${size}/${line} ${family}`;
-  const c=document.createElement('canvas'), ctx=c.getContext('2d');
-  ctx.font=font;
-  const m=ctx.measureText('кенгшзхываполжэячсмитью');
-  const a=m.actualBoundingBoxAscent||0, d=m.actualBoundingBoxDescent||0;
+  const c=document.createElement('canvas'), ctx=c.getContext('2d'); ctx.font=font;
+  const m=ctx.measureText('кенгшзхываполжэячсмитью'); const a=m.actualBoundingBoxAscent||0, d=m.actualBoundingBoxDescent||0;
   return (a||d)? {a,d}:null;
 }
 function getFontMetrics(el){ if(!fontMetricsCache) fontMetricsCache=computeFontMetricsFor(el); return fontMetricsCache; }
 function buildStrike(textWrap, animate=true){
   const old=textWrap.querySelector('.strike-svg'); if(old) old.remove();
-  const textEl=textWrap.querySelector('.task-text'); if(!textEl) return;
-  syncEmpty(textEl);
-
+  const textEl=textWrap.querySelector('.task-text'); if(!textEl) return; syncEmpty(textEl);
   const range=document.createRange(); range.selectNodeContents(textEl);
   const rects=Array.from(range.getClientRects());
-
   const svgNS='http://www.w3.org/2000/svg';
   const svg=document.createElementNS(svgNS,'svg'); svg.classList.add('strike-svg');
-
   const parent=textWrap.getBoundingClientRect();
   svg.setAttribute('width',parent.width); svg.setAttribute('height',parent.height);
   svg.setAttribute('viewBox',`0 0 ${parent.width} ${parent.height}`);
-
   const fm=getFontMetrics(textEl); const ratio=0.56;
-
   rects.forEach(r=>{
-    const x1=r.left-parent.left, x2=r.right-parent.left, len=Math.max(0,x2-x1);
-    if(len<=0) return;
-    let y;
-    if(fm){ const baseline=(r.bottom-parent.top)-fm.d; const xh=fm.a; y=baseline-(xh/2); }
-    else { y=(r.top-parent.top)+r.height*ratio; }
-
+    const x1=r.left-parent.left, x2=r.right-parent.left, len=Math.max(0,x2-x1); if(len<=0) return;
+    let y; if(fm){ const baseline=(r.bottom-parent.top)-fm.d; const xh=fm.a; y=baseline-(xh/2); }
+    else{ y=(r.top-parent.top)+r.height*ratio; }
     const line=document.createElementNS(svgNS,'line');
     line.setAttribute('x1',x1); line.setAttribute('y1',y);
     line.setAttribute('x2',x2); line.setAttribute('y2',y);
-    line.classList.add('strike-line'); line.style.setProperty('--len', `${len}`);
+    line.classList.add('strike-line'); line.style.setProperty('--len',`${len}`);
     if(!animate){ line.style.strokeDashoffset=0; line.style.transition='none'; }
     svg.appendChild(line);
     if(animate){ requestAnimationFrame(()=>{ line.style.strokeDashoffset=0; }); }
   });
-
   textWrap.appendChild(svg);
 }
 
 /* Фокус в конец */
-function placeCaretAtEnd(el){
-  const r=document.createRange(); r.selectNodeContents(el); r.collapse(false);
-  const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
-}
-function focusEditable(el){
-  requestAnimationFrame(()=>{ el.focus({preventScroll:true}); placeCaretAtEnd(el); try{ el.click(); }catch{} });
-}
+function placeCaretAtEnd(el){ const r=document.createRange(); r.selectNodeContents(el); r.collapse(false);
+  const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); }
+function focusEditable(el){ requestAnimationFrame(()=>{ el.focus({preventScroll:true}); placeCaretAtEnd(el); try{ el.click(); }catch{} }); }
 
-/* ===================== Мягкая FLIP + «гравитационная линза» ===================== */
-const MOVE_DURATION = 1000;           // длительность «проезда» призрака (мс) — плавнее
-const LIST_EASE     = 'ease-in-out';  // плавность для FLIP остальных
-const LENS_RADIUS   = 140;            // радиус влияния «линзы» (px) по вертикали
-const LENS_SCALE    = 0.08;           // макс. прибавка масштаба (0.08 => 8%)
-const LENS_KERN_PX  = 0.35;           // макс. прибавка letter-spacing (px)
+/* ===================== Black-Hole Motion: параметры поля ===================== */
+const MOVE_DURATION = 1150;        // длительность «проезда» призрака (мс)
+const LIST_EASE     = 'ease-in-out';
+const FIELD_RADIUS  = 220;         // радиус влияния по вертикали (px)
+const STRETCH_MAX   = 0.22;        // макс. вертикальная растяжка (1 + 0.22 = 1.22 по Y)
+const SQUEEZE_MAX   = 0.12;        // макс. горизонтальное сжатие (1 - 0.12 = 0.88 по X)
+const SKEW_MAX_DEG  = 6.0;         // макс. скошенность (дуга) в градусах
+const KERN_MAX_PX   = 0.45;        // макс. letter-spacing (px)
+const BLUR_MAX_PX   = 0.35;        // лёгкое размытие ближе к сингулярности
+const SPRING_K      = 22;          // жёсткость «хвоста» (пружины) — чем больше, тем быстрее
+const SPRING_DAMP   = 0.82;        // демпфирование 0..1 — чем меньше, тем больше «дребезг»
 
-function rectMap(ul){
-  const m = new Map();
-  ul.querySelectorAll(':scope > li').forEach(el => m.set(el, el.getBoundingClientRect()));
-  return m;
-}
+/* Вспомогательные */
+const clamp=(v,min,max)=>v<min?min:(v>max?max:v);
+const lerp=(a,b,t)=>a+(b-a)*t;
+
+/* Карта состояний пружин для хвоста (на wrap-элементах) */
+const warpState = new WeakMap(); // wrap -> {val, vel}
+
+/* Замер rect-ов всех li */
+function rectMap(ul){ const m=new Map(); ul.querySelectorAll(':scope > li').forEach(el=>m.set(el,el.getBoundingClientRect())); return m; }
+
+/* Создать «призрак» из li */
 function makeGhostFrom(li, r0){
   const ghost = li.cloneNode(true);
   ghost.classList.add('ghost-li');
-  const s = ghost.style;
-  s.left   = r0.left + 'px';
-  s.top    = r0.top  + 'px';
-  s.width  = r0.width  + 'px';
-  s.height = r0.height + 'px';
-  document.body.appendChild(ghost);
-  return ghost;
+  const s=ghost.style; s.left=r0.left+'px'; s.top=r0.top+'px'; s.width=r0.width+'px'; s.height=r0.height+'px';
+  document.body.appendChild(ghost); return ghost;
 }
 
-/* «Линза»: в каждом кадре читаем положение призрака и искажаем ближайшие тексты */
-function startLensLoop(ghost, ul, movedLi){
-  let rafId = 0;
+/* Искажение одного wrap с пружинным запаздыванием */
+function warpWrap(wrap, target, direction, dt){
+  // Получить/инициализировать состояние
+  let st = warpState.get(wrap);
+  if(!st){ st={val:0, vel:0}; warpState.set(wrap, st); }
+  // Пружина (простая интеграция)
+  const k = SPRING_K, c = SPRING_DAMP, x = st.val, v = st.vel;
+  const force = (target - x) * k;
+  const newV = (v + force * (dt/1000)) * c;
+  const newX = x + newV * (dt/1000);
+  st.val = newX; st.vel = newV;
+
+  const amt = clamp(Math.abs(newX), 0, 1); // модуль силы
+  const sign = Math.sign(direction)||1;    // куда «гнём» (вверх/вниз относительно ghost)
+
+  // Параметры искажений
+  const scaleY = 1 + STRETCH_MAX * amt;
+  const scaleX = 1 - SQUEEZE_MAX * amt;
+  const skew   = sign * SKEW_MAX_DEG * amt;
+  const kern   = (KERN_MAX_PX * amt).toFixed(3)+'px';
+  const blur   = (BLUR_MAX_PX * amt).toFixed(3)+'px';
+
+  wrap.style.transform      = `translateZ(0) skewY(${skew}deg) scale(${scaleX}, ${scaleY})`;
+  wrap.style.letterSpacing  = kern;
+  wrap.style.filter         = `blur(${blur})`;
+}
+
+/* Сброс искажений для wrap */
+function resetWrap(wrap){
+  wrap.style.transform=''; wrap.style.letterSpacing=''; wrap.style.filter='';
+  warpState.delete(wrap);
+}
+
+/* Главный «линзовый» цикл — пока ghost движется */
+function startGravityLoop(ghost, ul, movedLi){
+  let rafId=0, prevTime=performance.now(), prevGhostY=null;
   const wraps = Array.from(ul.querySelectorAll(':scope > li .textwrap'))
                       .filter(w => !w.closest('li').isSameNode(movedLi));
 
-  function frame(){
-    // центр призрака по вертикали
+  function frame(now){
+    const dt = now - prevTime; prevTime = now;
     const gr = ghost.getBoundingClientRect();
     const gCenter = gr.top + gr.height/2;
+    const directionSignFromCenter = (center)=> (gCenter < center ? -1 : 1);
+
+    // для «хвоста» полезна оценка скорости ghost
+    let vGhost = 0;
+    if(prevGhostY!=null){ vGhost = (gCenter - prevGhostY) / (dt||1); }
+    prevGhostY = gCenter;
 
     for(const wrap of wraps){
       const wr = wrap.getBoundingClientRect();
       const wCenter = wr.top + wr.height/2;
       const dist = Math.abs(wCenter - gCenter);
 
-      // сила эффекта 0..1 с плавным спадом, чуть нелинейно (степень 1.3)
-      let k = 1 - (dist / LENS_RADIUS);
-      if (k < 0) k = 0; else k = Math.pow(k, 1.3);
+      // Плавный закон убывания: обратный квадрат с мягким «плинтусом»
+      const n = clamp(1 - (dist / FIELD_RADIUS), 0, 1);                   // линейный
+      const strength = Math.pow(n, 1.35) / (1 + (dist*dist)/(FIELD_RADIUS*FIELD_RADIUS)); // ближе к r^-2
+      const target = strength; // целевая «сила» для пружины
+      const dir = directionSignFromCenter(wCenter);
 
-      const scale = 1 + LENS_SCALE * k;
-      const kern  = (LENS_KERN_PX * k).toFixed(3) + 'px';
+      // Доп. «хвост»: если ghost быстро уходит от wrap, добавляем небольшой импульс
+      const tailBoost = clamp(Math.abs(vGhost)*0.004, 0, 0.25); // чем быстрее ghost, тем сильнее хвост
+      const targetWithTail = clamp(target + tailBoost*strength, 0, 1);
 
-      // чуть сильнее «высоту» чем «ширину» — ближе к «грав. линзе»
-      wrap.style.transform = `translateZ(0) scale(${scale}, ${1 + (LENS_SCALE*1.15)*k})`;
-      wrap.style.letterSpacing = kern;
+      warpWrap(wrap, targetWithTail * dir, dir, dt);
     }
-
     rafId = requestAnimationFrame(frame);
   }
-
   rafId = requestAnimationFrame(frame);
 
-  // функция остановки и очистки
-  return () => {
+  // Возврат — остановка и очистка
+  return ()=>{
     cancelAnimationFrame(rafId);
-    for(const wrap of wraps){
-      wrap.style.transform = '';
-      wrap.style.letterSpacing = '';
-    }
+    for(const w of wraps) resetWrap(w);
   };
 }
 
-/**
- * Анимирует перестановку:
- * - измеряем позиции (до/после),
- * - делаем FLIP для остальных,
- * - двигаем «призрака» top'ом,
- * - параллельно применяем «линзу» на тексты вокруг траектории.
- */
+/* FLIP-анимация с чёрной дырой */
 function animateListReorder(movedLi, domChange){
   const ul = list;
 
@@ -235,11 +244,11 @@ function animateListReorder(movedLi, domChange){
   const before = rectMap(ul);
   const r0 = before.get(movedLi);
 
-  // 2) Призрак без рамок; реальный li скрыт
+  // 2) Готовим ghost, реальный li скрываем
   const ghost = makeGhostFrom(movedLi, r0);
   movedLi.classList.add('leaving');
 
-  // 3) Меняем DOM
+  // 3) Меняем DOM (append/insertBefore)
   domChange();
 
   // 4) После
@@ -248,36 +257,35 @@ function animateListReorder(movedLi, domChange){
 
   // 5) FLIP остальных (мягко)
   ul.querySelectorAll(':scope > li').forEach(el=>{
-    const a = after.get(el), b = before.get(el);
-    if(!a || !b || el === movedLi) return;
-    const dx = b.left - a.left;
-    const dy = b.top  - a.top;
-    if (dx || dy){
-      el.style.transform  = `translate(${dx}px, ${dy}px)`;
+    const a=after.get(el), b=before.get(el);
+    if(!a || !b || el===movedLi) return;
+    const dx=b.left - a.left, dy=b.top - a.top;
+    if(dx || dy){
+      el.style.transform=`translate(${dx}px, ${dy}px)`;
       el.offsetWidth; // reflow
-      el.style.transition = `transform 520ms ${LIST_EASE}`;
-      el.style.transform  = `translate(0,0)`;
+      el.style.transition=`transform 520ms ${LIST_EASE}`;
+      el.style.transform=`translate(0,0)`;
       el.addEventListener('transitionend', function te(){
         el.style.transition=''; el.style.transform=''; el.removeEventListener('transitionend', te);
       });
     }
   });
 
-  // 6) Запускаем «линзу»
-  const stopLens = startLensLoop(ghost, ul, movedLi);
+  // 6) Запускаем «гравитационное поле» вокруг ghost
+  const stopLens = startGravityLoop(ghost, ul, movedLi);
 
-  // 7) Проезд призрака
+  // 7) Проезд ghost — двигаем по top
   requestAnimationFrame(()=>{
-    const s = ghost.style;
-    s.transition = `top ${MOVE_DURATION}ms ${LIST_EASE}`;
+    const s=ghost.style;
+    s.transition=`top ${MOVE_DURATION}ms ${LIST_EASE}`;
     s.top = r1.top + 'px';
 
     ghost.addEventListener('transitionend', function done(){
       ghost.removeEventListener('transitionend', done);
-      stopLens();            // очистка искажений
-      ghost.remove();        // убираем призрак
-      movedLi.classList.remove('leaving'); // показываем реальный элемент на новой позиции
-    }, { once: true });
+      stopLens();                 // очистка искажений
+      ghost.remove();             // убрать призрак
+      movedLi.classList.remove('leaving'); // показать реальный li
+    }, { once:true });
   });
 }
 
@@ -296,14 +304,14 @@ function render(){
     circle.addEventListener('pointerleave',()=>circle.classList.remove('touch'));
 
     const wrap=document.createElement('div'); wrap.className='textwrap';
-    const text=document.createElement('div');
-    text.className='task-text'; text.contentEditable='true'; text.spellcheck=false;
+    const text=document.createElement('div'); text.className='task-text';
+    text.contentEditable='true'; text.spellcheck=false;
     text.textContent=t.text||''; syncEmpty(text);
 
     wrap.appendChild(text);
     li.appendChild(circle); li.appendChild(wrap); list.appendChild(li);
 
-    // Клик по кружку — отметка и анимация перемещения
+    /* Клик: done и «чёрная дыра» едет вниз/вверх */
     circle.addEventListener('click',()=>{
       if((text.textContent||'').trim()==='') return;
 
@@ -312,26 +320,23 @@ function render(){
       if(t.done){
         li.classList.add('done'); circle.innerHTML=''; circle.appendChild(makeTick());
         buildStrike(wrap,true);
-
         // протяжка вниз
-        animateListReorder(li, ()=> { list.appendChild(li); });
-
-      } else {
+        animateListReorder(li, ()=>{ list.appendChild(li); });
+      }else{
         li.classList.remove('done'); circle.innerHTML='';
         const s=wrap.querySelector('.strike-svg'); if(s) s.remove();
-
         // протяжка вверх (в начало)
-        animateListReorder(li, ()=> { list.insertBefore(li, list.firstChild); });
+        animateListReorder(li, ()=>{ list.insertBefore(li, list.firstChild); });
       }
     });
 
-    // Изменение текста
+    /* Изменение текста */
     text.addEventListener('input',()=>{
       tasks[i].text=text.textContent; save(); syncEmpty(text);
       if(t.done) buildStrike(wrap,false);
     });
 
-    // Backspace/Delete на пустой строке — удалить задачу
+    /* Backspace/Delete на пустой строке — удалить задачу */
     text.addEventListener('keydown',(e)=>{
       const val=(text.textContent||'').trim();
       if((e.key==='Backspace'||e.key==='Delete') && val===''){
@@ -368,30 +373,24 @@ document.addEventListener('pointerdown',(e)=>{
   }
 },{passive:true});
 
-/* ===================== Пересбор зачёркиваний при ресайзе ===================== */
+/* ===================== Пересбор зачёркивания при ресайзе ===================== */
 window.addEventListener('resize', ()=>{
   document.querySelectorAll('#tasks li.done .textwrap').forEach(w=>buildStrike(w,false));
 });
 
 /* ===================== Анти-rubber-band для iOS ===================== */
 (function lockIOSRubberBand(){
-  const scroller = document.getElementById('tasks');
-  if (!scroller) return;
-
-  document.addEventListener('touchmove', (e)=>{
-    if (!e.target.closest('#tasks')) e.preventDefault();
-  }, { passive: false });
-
-  scroller.addEventListener('touchstart', ()=>{
-    const max = scroller.scrollHeight - scroller.clientHeight;
-    if (max <= 0) return;
-    if (scroller.scrollTop <= 0) scroller.scrollTop = 1;
-    else if (scroller.scrollTop >= max) scroller.scrollTop = max - 1;
-  }, { passive: true });
-
-  scroller.addEventListener('touchmove', (e)=>{
-    if (scroller.scrollHeight <= scroller.clientHeight) e.preventDefault();
-  }, { passive: false });
+  const scroller=document.getElementById('tasks'); if(!scroller) return;
+  document.addEventListener('touchmove',(e)=>{ if(!e.target.closest('#tasks')) e.preventDefault(); },{passive:false});
+  scroller.addEventListener('touchstart',()=>{
+    const max=scroller.scrollHeight - scroller.clientHeight;
+    if(max<=0) return;
+    if(scroller.scrollTop<=0) scroller.scrollTop=1;
+    else if(scroller.scrollTop>=max) scroller.scrollTop=max-1;
+  },{passive:true});
+  scroller.addEventListener('touchmove',(e)=>{
+    if(scroller.scrollHeight<=scroller.clientHeight) e.preventDefault();
+  },{passive:false});
 })();
 
 /* ===================== Первый рендер ===================== */
