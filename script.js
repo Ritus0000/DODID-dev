@@ -1,43 +1,44 @@
 /* ============================================================
-   DODID — "Black Hole Motion" (полноценная реализация)
-   — FLIP-перестановка с «призраком»
-   — поле искажения: масштаб/скошенность/кернинг + хвост-запаздывание
-   — без рамок/теней у ghost; док с плюсом не трогаем
+   DODID — Black Hole per-letter warp (пер-буквенное искажение)
+   — Задача-«чёрная дыра» едет вверх/вниз (FLIP)
+   — КАЖДЫЙ СИМВОЛ соседних задач тянется, сжимается, искривляется
+   — Хвост: пружинная релаксация, лёгкая дуга, мягкое размытие
+   — Никаких рамок/теней у ghost; док не трогаем
    ============================================================ */
 
-/* ---------- Инжект минимального CSS (ghost + линзирование) ---------- */
+/* ---------- Инжект аккуратного CSS ---------- */
 (function injectStyles(){
-  // убрать старые инжекты, если были
   document.querySelectorAll('style[data-dodid-flip]').forEach(s=>s.remove());
-
   const css = `
-  /* Прячем реальный li, пока едет ghost */
   li.leaving{visibility:hidden}
-
-  /* Призрак: ни фона, ни тени, только клон контента */
   .ghost-li{
     position:fixed; z-index:9999; margin:0; pointer-events:none; box-sizing:border-box;
     will-change:top,left,transform;
     background:transparent!important; box-shadow:none!important; filter:none!important; border:0!important;
   }
-
-  /* Сделаем сам кружок призрака визуально «чёрной дырой» (тонко, без рамки) */
+  /* кружок у ghost — как «чёрная дыра» */
   .ghost-li .circle{
-    background: radial-gradient(closest-side, #000 0%, #0b0b0b 60%, #111 100%) !important;
+    background: radial-gradient(closest-side, #000 0%, #050505 60%, #0b0b0b 100%) !important;
     border-color: transparent !important;
   }
-
-  /* Линзируем .textwrap (внутри li) — отдельный слой, чтобы не конфликтовать с FLIP на li */
-  #tasks .textwrap{
-    will-change: transform, letter-spacing, filter;
-    transform-origin: center center;
-  }
-
-  /* Поддержка FLIP */
   #tasks{ overflow-anchor:none; }
   #tasks li{ will-change: transform; }
-  `.trim();
 
+  /* Пер-буквенный overlay на время линзы */
+  .distort-layer{
+    position:absolute; inset:0; pointer-events:none;
+    font: inherit; line-height: inherit;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .distort-layer .dch{
+    display:inline-block; will-change: transform, filter;
+    transform-origin: 50% 50%;
+  }
+  /* если пользователь просит меньше движения — выключим варп */
+  @media (prefers-reduced-motion: reduce){
+    .distort-layer .dch{ transform:none !important; filter:none !important; }
+  }
+  `.trim();
   const tag = document.createElement('style');
   tag.setAttribute('data-dodid-flip','true');
   tag.textContent = css;
@@ -57,7 +58,7 @@ function save(){ localStorage.setItem(KEY_TASKS, JSON.stringify(tasks)); }
 function todayKey(d=new Date()){ return d.toDateString(); }
 function rolloverIfNeeded(){
   const today=todayKey(), last=localStorage.getItem(KEY_LAST); if(last===today) return;
-  const carried = tasks.filter(t=>!t.done && (t.text||'').trim()!=='').map(t=>({text:t.text,done:false}));
+  const carried=tasks.filter(t=>!t.done && (t.text||'').trim()!=='').map(t=>({text:t.text,done:false}));
   tasks = carried.length? [...carried,{text:'',done:false}] : Array.from({length:START_TASKS},()=>({text:'',done:false}));
   save(); localStorage.setItem(KEY_LAST,today); render();
 }
@@ -67,7 +68,7 @@ rolloverIfNeeded(); setInterval(rolloverIfNeeded,60_000);
 const list = document.getElementById('tasks');
 const addBtn = document.getElementById('addBtn');
 
-/* Тонкий скроллбар только во время прокрутки */
+/* Показ тонкой полоски только во время прокрутки */
 let hideTimer=null;
 list.addEventListener('scroll', ()=>{
   list.classList.add('scrolling');
@@ -88,10 +89,7 @@ function makeTick(){
 let fontMetricsCache=null;
 function computeFontMetricsFor(el){
   const cs=getComputedStyle(el);
-  const style=cs.fontStyle||'normal', weight=cs.fontWeight||'400';
-  const size=cs.fontSize||'18px', line=cs.lineHeight&&cs.lineHeight!=='normal'? cs.lineHeight:size;
-  const family=cs.fontFamily||'Helvetica Neue, Arial, sans-serif';
-  const font=`${style} ${weight} ${size}/${line} ${family}`;
+  const font=`${cs.fontStyle||'normal'} ${cs.fontWeight||'400'} ${cs.fontSize||'18px'}/${(cs.lineHeight&&cs.lineHeight!=='normal')?cs.lineHeight:cs.fontSize||'18px'} ${cs.fontFamily||'Helvetica Neue, Arial, sans-serif'}`;
   const c=document.createElement('canvas'), ctx=c.getContext('2d'); ctx.font=font;
   const m=ctx.measureText('кенгшзхываполжэячсмитью'); const a=m.actualBoundingBoxAscent||0, d=m.actualBoundingBoxDescent||0;
   return (a||d)? {a,d}:null;
@@ -128,115 +126,142 @@ function placeCaretAtEnd(el){ const r=document.createRange(); r.selectNodeConten
   const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); }
 function focusEditable(el){ requestAnimationFrame(()=>{ el.focus({preventScroll:true}); placeCaretAtEnd(el); try{ el.click(); }catch{} }); }
 
-/* ===================== Black-Hole Motion: параметры поля ===================== */
-const MOVE_DURATION = 1150;        // длительность «проезда» призрака (мс)
+/* ===================== Параметры «чёрной дыры» (пер-буквенно) ===================== */
+const MOVE_DURATION = 1150;        // длительность проезда ghost (мс)
 const LIST_EASE     = 'ease-in-out';
 const FIELD_RADIUS  = 220;         // радиус влияния по вертикали (px)
-const STRETCH_MAX   = 0.22;        // макс. вертикальная растяжка (1 + 0.22 = 1.22 по Y)
-const SQUEEZE_MAX   = 0.12;        // макс. горизонтальное сжатие (1 - 0.12 = 0.88 по X)
-const SKEW_MAX_DEG  = 6.0;         // макс. скошенность (дуга) в градусах
-const KERN_MAX_PX   = 0.45;        // макс. letter-spacing (px)
-const BLUR_MAX_PX   = 0.35;        // лёгкое размытие ближе к сингулярности
-const SPRING_K      = 22;          // жёсткость «хвоста» (пружины) — чем больше, тем быстрее
-const SPRING_DAMP   = 0.82;        // демпфирование 0..1 — чем меньше, тем больше «дребезг»
+const STRETCH_MAX   = 0.22;        // макс. вертикальная растяжка символа
+const SQUEEZE_MAX   = 0.12;        // макс. горизонтальное сжатие
+const SKEW_MAX_DEG  = 6.0;         // макс. дуга (скошенность)
+const BLUR_MAX_PX   = 0.35;        // размытие у сингулярности
+const LIFT_PX       = 6;           // максимум локального подъёма/просадки символа (дуга)
+const SPRING_K      = 22;          // жёсткость хвоста (чем больше — быстрее)
+const SPRING_DAMP   = 0.82;        // демпфирование 0..1
 
-/* Вспомогательные */
 const clamp=(v,min,max)=>v<min?min:(v>max?max:v);
-const lerp=(a,b,t)=>a+(b-a)*t;
 
-/* Карта состояний пружин для хвоста (на wrap-элементах) */
-const warpState = new WeakMap(); // wrap -> {val, vel}
-
-/* Замер rect-ов всех li */
-function rectMap(ul){ const m=new Map(); ul.querySelectorAll(':scope > li').forEach(el=>m.set(el,el.getBoundingClientRect())); return m; }
-
-/* Создать «призрак» из li */
-function makeGhostFrom(li, r0){
-  const ghost = li.cloneNode(true);
-  ghost.classList.add('ghost-li');
-  const s=ghost.style; s.left=r0.left+'px'; s.top=r0.top+'px'; s.width=r0.width+'px'; s.height=r0.height+'px';
-  document.body.appendChild(ghost); return ghost;
+/* ====== Пер-буквенный overlay ====== */
+function makeDistortLayer(wrap){
+  // уже есть слой? — переиспользуем
+  let layer = wrap.querySelector(':scope > .distort-layer');
+  if(layer) return layer;
+  layer = document.createElement('div');
+  layer.className = 'distort-layer';
+  const src = wrap.querySelector('.task-text');
+  // важный трюк: заменяем пробелы на NBSP, чтобы спаны не «схлопывались»
+  const txt = (src.textContent||'').replace(/ /g, '\u00A0');
+  for(const ch of txt){
+    const span = document.createElement('span');
+    span.className='dch';
+    span.textContent=ch;
+    layer.appendChild(span);
+  }
+  wrap.appendChild(layer);
+  // прячем оригинал только по оптической части (сохраняем layout/высоту)
+  src.style.opacity='0';
+  return layer;
+}
+function removeDistortLayer(wrap){
+  const src = wrap.querySelector('.task-text');
+  const layer = wrap.querySelector(':scope > .distort-layer');
+  if(layer) layer.remove();
+  if(src) src.style.opacity='';
 }
 
-/* Искажение одного wrap с пружинным запаздыванием */
-function warpWrap(wrap, target, direction, dt){
-  // Получить/инициализировать состояние
-  let st = warpState.get(wrap);
-  if(!st){ st={val:0, vel:0}; warpState.set(wrap, st); }
-  // Пружина (простая интеграция)
-  const k = SPRING_K, c = SPRING_DAMP, x = st.val, v = st.vel;
-  const force = (target - x) * k;
-  const newV = (v + force * (dt/1000)) * c;
-  const newX = x + newV * (dt/1000);
-  st.val = newX; st.vel = newV;
+/* Состояние пружин по символам: WeakMap(layer -> [{val, vel} per char]) */
+const charSpring = new WeakMap();
 
-  const amt = clamp(Math.abs(newX), 0, 1); // модуль силы
-  const sign = Math.sign(direction)||1;    // куда «гнём» (вверх/вниз относительно ghost)
+/* Главный «пер-буквенный» луп */
+function startCharLensLoop(ghost, ul, movedLi){
+  let rafId=0, prevTime=performance.now(), prevGY=null;
 
-  // Параметры искажений
-  const scaleY = 1 + STRETCH_MAX * amt;
-  const scaleX = 1 - SQUEEZE_MAX * amt;
-  const skew   = sign * SKEW_MAX_DEG * amt;
-  const kern   = (KERN_MAX_PX * amt).toFixed(3)+'px';
-  const blur   = (BLUR_MAX_PX * amt).toFixed(3)+'px';
-
-  wrap.style.transform      = `translateZ(0) skewY(${skew}deg) scale(${scaleX}, ${scaleY})`;
-  wrap.style.letterSpacing  = kern;
-  wrap.style.filter         = `blur(${blur})`;
-}
-
-/* Сброс искажений для wrap */
-function resetWrap(wrap){
-  wrap.style.transform=''; wrap.style.letterSpacing=''; wrap.style.filter='';
-  warpState.delete(wrap);
-}
-
-/* Главный «линзовый» цикл — пока ghost движется */
-function startGravityLoop(ghost, ul, movedLi){
-  let rafId=0, prevTime=performance.now(), prevGhostY=null;
-  const wraps = Array.from(ul.querySelectorAll(':scope > li .textwrap'))
-                      .filter(w => !w.closest('li').isSameNode(movedLi));
+  // Готовим слои для всех текстов, кроме перемещаемого
+  const entries = [];
+  ul.querySelectorAll(':scope > li .textwrap').forEach(wrap=>{
+    if(wrap.closest('li')===movedLi) return;
+    const layer = makeDistortLayer(wrap);
+    const chars = Array.from(layer.querySelectorAll('.dch'));
+    if(!charSpring.has(layer)){
+      charSpring.set(layer, chars.map(()=>({val:0, vel:0})));
+    }else{
+      const arr=charSpring.get(layer);
+      if(arr.length!==chars.length) charSpring.set(layer, chars.map(()=>({val:0, vel:0})));
+    }
+    entries.push({wrap, layer, chars});
+  });
 
   function frame(now){
     const dt = now - prevTime; prevTime = now;
     const gr = ghost.getBoundingClientRect();
     const gCenter = gr.top + gr.height/2;
-    const directionSignFromCenter = (center)=> (gCenter < center ? -1 : 1);
 
-    // для «хвоста» полезна оценка скорости ghost
-    let vGhost = 0;
-    if(prevGhostY!=null){ vGhost = (gCenter - prevGhostY) / (dt||1); }
-    prevGhostY = gCenter;
+    let vGhost=0;
+    if(prevGY!=null){ vGhost=(gCenter - prevGY) / (dt||1); }
+    prevGY = gCenter;
 
-    for(const wrap of wraps){
-      const wr = wrap.getBoundingClientRect();
-      const wCenter = wr.top + wr.height/2;
-      const dist = Math.abs(wCenter - gCenter);
+    for(const {wrap, layer, chars} of entries){
+      const springs = charSpring.get(layer);
+      if(!springs) continue;
 
-      // Плавный закон убывания: обратный квадрат с мягким «плинтусом»
-      const n = clamp(1 - (dist / FIELD_RADIUS), 0, 1);                   // линейный
-      const strength = Math.pow(n, 1.35) / (1 + (dist*dist)/(FIELD_RADIUS*FIELD_RADIUS)); // ближе к r^-2
-      const target = strength; // целевая «сила» для пружины
-      const dir = directionSignFromCenter(wCenter);
+      for(let i=0;i<chars.length;i++){
+        const ch = chars[i];
+        // Геометрия символа
+        const cr = ch.getBoundingClientRect();
+        const cCenter = cr.top + cr.height/2;
+        const dist = Math.abs(cCenter - gCenter);
+        const dir = (gCenter < cCenter ? -1 : 1); // знак дуги (вверх/вниз)
 
-      // Доп. «хвост»: если ghost быстро уходит от wrap, добавляем небольшой импульс
-      const tailBoost = clamp(Math.abs(vGhost)*0.004, 0, 0.25); // чем быстрее ghost, тем сильнее хвост
-      const targetWithTail = clamp(target + tailBoost*strength, 0, 1);
+        // Сила притяжения (плавно затухает с расстоянием; r^-2 с плинтусом)
+        const n = clamp(1 - (dist / FIELD_RADIUS), 0, 1);
+        let target = (Math.pow(n, 1.35)) / (1 + (dist*dist)/(FIELD_RADIUS*FIELD_RADIUS));
 
-      warpWrap(wrap, targetWithTail * dir, dir, dt);
+        // Быстрый ghost даёт «хвост»
+        const tailBoost = clamp(Math.abs(vGhost)*0.004, 0, 0.25);
+        target = clamp(target + tailBoost*target, 0, 1);
+
+        // Пружина
+        const st = springs[i];
+        const k = SPRING_K, c = SPRING_DAMP;
+        const force = (dir*target - st.val) * k;
+        st.vel = (st.vel + force * (dt/1000)) * c;
+        st.val = st.val + st.vel * (dt/1000);
+
+        // Амплитуда (0..1) и знак
+        const amt = clamp(Math.abs(st.val),0,1);
+        const sgn = Math.sign(st.val)||1;
+
+        // Параметры деформации символа
+        const scaleY = 1 + STRETCH_MAX * amt;
+        const scaleX = 1 - SQUEEZE_MAX * amt;
+        const skew   = sgn * SKEW_MAX_DEG * amt;
+        const blur   = (BLUR_MAX_PX * amt).toFixed(3)+'px';
+        const lift   = sgn * LIFT_PX * amt; // локальная дуга
+
+        ch.style.transform = `translate3d(0, ${lift}px, 0) skewY(${skew}deg) scale(${scaleX}, ${scaleY})`;
+        ch.style.filter    = `blur(${blur})`;
+      }
     }
+
     rafId = requestAnimationFrame(frame);
   }
   rafId = requestAnimationFrame(frame);
 
-  // Возврат — остановка и очистка
+  // Стоп и очистка
   return ()=>{
     cancelAnimationFrame(rafId);
-    for(const w of wraps) resetWrap(w);
+    for(const {wrap} of entries) removeDistortLayer(wrap);
   };
 }
 
-/* FLIP-анимация с чёрной дырой */
+/* ===== FLIP-перестановка с ghost ===== */
+function rectMap(ul){ const m=new Map(); ul.querySelectorAll(':scope > li').forEach(el=>m.set(el,el.getBoundingClientRect())); return m; }
+function makeGhostFrom(li, r0){
+  const ghost=li.cloneNode(true);
+  ghost.classList.add('ghost-li');
+  const s=ghost.style; s.left=r0.left+'px'; s.top=r0.top+'px'; s.width=r0.width+'px'; s.height=r0.height+'px';
+  document.body.appendChild(ghost); return ghost;
+}
+
 function animateListReorder(movedLi, domChange){
   const ul = list;
 
@@ -244,25 +269,25 @@ function animateListReorder(movedLi, domChange){
   const before = rectMap(ul);
   const r0 = before.get(movedLi);
 
-  // 2) Готовим ghost, реальный li скрываем
+  // 2) Ghost
   const ghost = makeGhostFrom(movedLi, r0);
   movedLi.classList.add('leaving');
 
-  // 3) Меняем DOM (append/insertBefore)
+  // 3) Меняем DOM
   domChange();
 
   // 4) После
   const after = rectMap(ul);
   const r1 = after.get(movedLi);
 
-  // 5) FLIP остальных (мягко)
+  // 5) FLIP остальных
   ul.querySelectorAll(':scope > li').forEach(el=>{
     const a=after.get(el), b=before.get(el);
     if(!a || !b || el===movedLi) return;
     const dx=b.left - a.left, dy=b.top - a.top;
     if(dx || dy){
       el.style.transform=`translate(${dx}px, ${dy}px)`;
-      el.offsetWidth; // reflow
+      el.offsetWidth;
       el.style.transition=`transform 520ms ${LIST_EASE}`;
       el.style.transform=`translate(0,0)`;
       el.addEventListener('transitionend', function te(){
@@ -271,20 +296,19 @@ function animateListReorder(movedLi, domChange){
     }
   });
 
-  // 6) Запускаем «гравитационное поле» вокруг ghost
-  const stopLens = startGravityLoop(ghost, ul, movedLi);
+  // 6) Запускаем пер-буквенную линзу
+  const stopLens = startCharLensLoop(ghost, ul, movedLi);
 
-  // 7) Проезд ghost — двигаем по top
+  // 7) Двигаем ghost
   requestAnimationFrame(()=>{
     const s=ghost.style;
     s.transition=`top ${MOVE_DURATION}ms ${LIST_EASE}`;
     s.top = r1.top + 'px';
-
     ghost.addEventListener('transitionend', function done(){
       ghost.removeEventListener('transitionend', done);
-      stopLens();                 // очистка искажений
+      stopLens();                 // очистка слоёв/стилей
       ghost.remove();             // убрать призрак
-      movedLi.classList.remove('leaving'); // показать реальный li
+      movedLi.classList.remove('leaving');
     }, { once:true });
   });
 }
@@ -311,21 +335,20 @@ function render(){
     wrap.appendChild(text);
     li.appendChild(circle); li.appendChild(wrap); list.appendChild(li);
 
-    /* Клик: done и «чёрная дыра» едет вниз/вверх */
+    /* Клик: done и «чёрная дыра» */
     circle.addEventListener('click',()=>{
       if((text.textContent||'').trim()==='') return;
-
       t.done=!t.done; save();
 
       if(t.done){
         li.classList.add('done'); circle.innerHTML=''; circle.appendChild(makeTick());
         buildStrike(wrap,true);
-        // протяжка вниз
+        // вниз
         animateListReorder(li, ()=>{ list.appendChild(li); });
       }else{
         li.classList.remove('done'); circle.innerHTML='';
         const s=wrap.querySelector('.strike-svg'); if(s) s.remove();
-        // протяжка вверх (в начало)
+        // вверх (в начало)
         animateListReorder(li, ()=>{ list.insertBefore(li, list.firstChild); });
       }
     });
@@ -336,7 +359,7 @@ function render(){
       if(t.done) buildStrike(wrap,false);
     });
 
-    /* Backspace/Delete на пустой строке — удалить задачу */
+    /* Backspace/Delete на пустой строке — удалить */
     text.addEventListener('keydown',(e)=>{
       const val=(text.textContent||'').trim();
       if((e.key==='Backspace'||e.key==='Delete') && val===''){
