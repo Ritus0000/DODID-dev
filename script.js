@@ -1,17 +1,16 @@
 /* ============================================================
-   DODID — полный скрипт с живой FLIP-анимацией перемещения
-   — задача «проезжает» через список (ghost), соседи подпрыгивают
-   — порядок меняется только в DOM (модель сохраняет тексты/флаги)
-   — нижний док с плюсом не трогаем (фиксирован в CSS)
+   DODID — script.js с мягкой FLIP-анимацией
+   — задача «проезжает» плавно, без рамки и теней
+   — соседи едва подпрыгивают (2px), общая динамика мягкая
    ============================================================ */
 
-/* ---------- Служебно: подмешаем CSS для FLIP/ghost/bump автоматически ---------- */
+/* ---------- Авто-добавление минимального CSS для анимаций ---------- */
 (function injectFlipStyles(){
   const css = `
-/* пока реальный li «едет» в виде призрака — прячем его */
+/* Реальный li скрыт, пока едет его «призрак» */
 li.leaving { visibility: hidden; }
 
-/* «Призрак» перемещаемого элемента: поверх списка, едет по top */
+/* «Призрак» перемещаемого элемента: вообще без «рамки» и теней */
 .ghost-li {
   position: fixed;
   z-index: 9999;
@@ -19,30 +18,20 @@ li.leaving { visibility: hidden; }
   pointer-events: none;
   box-sizing: border-box;
   will-change: transform, top, left;
-  filter: drop-shadow(0 8px 18px rgba(0,0,0,.15));
-  border-radius: 8px;
-  background: #fff;
+  /* никаких background, border, shadow — выглядит как оригинальный li */
 }
 
-/* лёгкое «приземление» призрака в финале */
-@keyframes settle {
-  0%   { transform: translateY(0); }
-  35%  { transform: translateY(-6px); }
-  100% { transform: translateY(0); }
-}
-.ghost-settle { animation: settle 220ms cubic-bezier(.25,1.4,.3,1); }
-
-/* подпрыгивание элементов, через которые «проехали» */
+/* Лёгкое подпрыгивание элементов, мимо которых проезжаем (всего 2px) */
 @keyframes bump {
   0%   { transform: translateY(0); }
-  40%  { transform: translateY(-4px); }
+  40%  { transform: translateY(-2px); }
   100% { transform: translateY(0); }
 }
 .bump {
-  animation: bump 260ms cubic-bezier(.25,1.4,.3,1);
+  animation: bump 220ms ease-out;
 }
 
-/* немного помощи браузеру — плавность при FLIP */
+/* Помощь браузеру при FLIP */
 #tasks { overflow-anchor: none; }
 #tasks li { will-change: transform; }
   `.trim();
@@ -108,7 +97,7 @@ function makeTick(){
   svg.appendChild(p1); svg.appendChild(p2); return svg;
 }
 
-/* ===== Зачёркивание по фактическим строкам текста (SVG) ===== */
+/* ===== Зачёркивание (SVG по реальным строкам) ===== */
 let fontMetricsCache=null;
 function computeFontMetricsFor(el){
   const cs=getComputedStyle(el);
@@ -168,9 +157,9 @@ function focusEditable(el){
   requestAnimationFrame(()=>{ el.focus({preventScroll:true}); placeCaretAtEnd(el); try{ el.click(); }catch{} });
 }
 
-/* ===================== FLIP-анимация: «протяжка» и подпрыгивания ===================== */
-const MOVE_DURATION = 700; // мс — долгое «проезжание»
-const LIST_EASE     = 'cubic-bezier(.2,.8,.2,1)';
+/* ===================== Мягкая FLIP-анимация ===================== */
+const MOVE_DURATION = 950; // более плавный, долгий проезд
+const LIST_EASE     = 'ease-in-out'; // мягкая кривая для остального списка
 
 function rectMap(ul){
   const m = new Map();
@@ -193,30 +182,27 @@ function makeGhostFrom(li, r0){
  * Анимирует перестановку:
  * - до: меряем позиции,
  * - делаем DOM-перестановку (в колбэке),
- * - после: FLIP для всех, «призрак» едет по top, пересекаемые подпрыгивают.
- *
- * @param {HTMLLIElement} movedLi
- * @param {Function} domChange - делает саму перестановку (appendChild/insertBefore)
+ * - после: FLIP для всех, «призрак» едет по top, пересекаемые слегка подпрыгивают.
  */
 function animateListReorder(movedLi, domChange){
   const ul = list;
 
-  // 1) До — замеряем
+  // 1) До
   const before = rectMap(ul);
   const r0 = before.get(movedLi);
 
-  // 2) Готовим «призрака», реальный li скрываем
+  // 2) Призрак без рамки; реальный li скрыт
   const ghost = makeGhostFrom(movedLi, r0);
   movedLi.classList.add('leaving');
 
   // 3) Меняем DOM
   domChange();
 
-  // 4) После — замеряем
+  // 4) После
   const after = rectMap(ul);
   const r1 = after.get(movedLi);
 
-  // 5) FLIP для всех li, кроме скрытого movedLi
+  // 5) FLIP остальных li (мягче и дольше)
   ul.querySelectorAll(':scope > li').forEach(el=>{
     const a = after.get(el), b = before.get(el);
     if(!a || !b || el === movedLi) return;
@@ -225,7 +211,7 @@ function animateListReorder(movedLi, domChange){
     if (dx || dy){
       el.style.transform  = `translate(${dx}px, ${dy}px)`;
       el.offsetWidth; // reflow
-      el.style.transition = `transform 420ms ${LIST_EASE}`;
+      el.style.transition = `transform 520ms ${LIST_EASE}`;
       el.style.transform  = `translate(0,0)`;
       el.addEventListener('transitionend', function te(){
         el.style.transition=''; el.style.transform=''; el.removeEventListener('transitionend', te);
@@ -233,7 +219,7 @@ function animateListReorder(movedLi, domChange){
     }
   });
 
-  // 6) Подпрыгивание элементов, через которые проедет призрак
+  // 6) Едва заметное подпрыгивание у тех, мимо кого проезжаем
   const ghostMidStart = r0.top + r0.height/2;
   const ghostMidEnd   = r1.top + r1.height/2;
   const passMin = Math.min(ghostMidStart, ghostMidEnd);
@@ -245,7 +231,7 @@ function animateListReorder(movedLi, domChange){
     const center = a.top + a.height/2;
     if(center >= passMin && center <= passMax){
       const dist = Math.abs(center - ghostMidStart);
-      const delay = Math.min(250, dist * 0.25);
+      const delay = Math.min(180, dist * 0.2); // мягче и короче
       el.classList.add('bump');
       el.style.animationDelay = `${Math.round(delay)}ms`;
       el.addEventListener('animationend', function ae(){
@@ -256,19 +242,16 @@ function animateListReorder(movedLi, domChange){
     }
   });
 
-  // 7) Сам «проезд» призрака
+  // 7) Сам проезд призрака — плавно, без финального «отскока»
   requestAnimationFrame(()=>{
     const s = ghost.style;
-    s.transition = `top ${MOVE_DURATION}ms cubic-bezier(.18,1.0,.22,1)`;
+    s.transition = `top ${MOVE_DURATION}ms ease-in-out`;
     s.top = r1.top + 'px';
 
     ghost.addEventListener('transitionend', function done(){
       ghost.removeEventListener('transitionend', done);
-      ghost.classList.add('ghost-settle'); // маленький отскок
-      ghost.addEventListener('animationend', ()=>{
-        ghost.remove();
-        movedLi.classList.remove('leaving'); // показываем настоящий элемент
-      }, { once: true });
+      ghost.remove();                     // без settle-анимации
+      movedLi.classList.remove('leaving'); // показываем реальный элемент
     }, { once: true });
   });
 }
@@ -295,7 +278,7 @@ function render(){
     wrap.appendChild(text);
     li.appendChild(circle); li.appendChild(wrap); list.appendChild(li);
 
-    /* Клик по кружку: отмечаем done и запускаем анимацию перемещения */
+    /* Клик по кружку: отмечаем done и запускаем мягкую протяжку */
     circle.addEventListener('click',()=>{
       if((text.textContent||'').trim()==='') return;
 
@@ -305,19 +288,15 @@ function render(){
         li.classList.add('done'); circle.innerHTML=''; circle.appendChild(makeTick());
         buildStrike(wrap,true);
 
-        // Протяжка вниз
-        animateListReorder(li, ()=> {
-          list.appendChild(li);
-        });
+        // Протяжка вниз (в конец)
+        animateListReorder(li, ()=> { list.appendChild(li); });
 
       } else {
         li.classList.remove('done'); circle.innerHTML='';
         const s=wrap.querySelector('.strike-svg'); if(s) s.remove();
 
         // Протяжка вверх (в начало)
-        animateListReorder(li, ()=> {
-          list.insertBefore(li, list.firstChild);
-        });
+        animateListReorder(li, ()=> { list.insertBefore(li, list.firstChild); });
       }
     });
 
@@ -374,12 +353,10 @@ window.addEventListener('resize', ()=>{
   const scroller = document.getElementById('tasks');
   if (!scroller) return;
 
-  // Если тянем вне списка — запрет вертикального скролла
   document.addEventListener('touchmove', (e)=>{
     if (!e.target.closest('#tasks')) e.preventDefault();
   }, { passive: false });
 
-  // На старте касания — держим scrollTop вне краёв
   scroller.addEventListener('touchstart', ()=>{
     const max = scroller.scrollHeight - scroller.clientHeight;
     if (max <= 0) return;
@@ -387,7 +364,6 @@ window.addEventListener('resize', ()=>{
     else if (scroller.scrollTop >= max) scroller.scrollTop = max - 1;
   }, { passive: true });
 
-  // Если контента мало — вообще глушим «пружину» внутри списка
   scroller.addEventListener('touchmove', (e)=>{
     if (scroller.scrollHeight <= scroller.clientHeight) e.preventDefault();
   }, { passive: false });
